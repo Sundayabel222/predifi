@@ -2,7 +2,7 @@ use soroban_sdk::{Address, BytesN, Env, String};
 
 use crate::base::{
     errors::CrowdfundingError,
-    types::{CampaignDetails, PoolConfig, PoolState},
+    types::{CampaignDetails, EmergencyWithdrawRequest, PoolConfig, PoolState},
 };
 
 pub trait CrowdfundingTrait {
@@ -50,4 +50,24 @@ pub trait CrowdfundingTrait {
         amount: i128,
         is_private: bool,
     ) -> Result<(), CrowdfundingError>;
+
+    fn request_emergency_withdraw(
+        env: Env,
+        pool_id: u64,
+        creator: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<(), CrowdfundingError>;
+
+    fn execute_emergency_withdraw(env: Env, pool_id: u64) -> Result<(), CrowdfundingError>;
+
+    fn set_grace_period(env: Env, admin: Address, grace_period: u64)
+        -> Result<(), CrowdfundingError>;
+
+    fn get_grace_period(env: Env) -> u64;
+
+    fn get_emergency_withdraw_request(
+        env: Env,
+        pool_id: u64,
+    ) -> Option<EmergencyWithdrawRequest>;
 }

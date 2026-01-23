@@ -16,6 +16,7 @@ pub struct CampaignDetails {
 pub struct PoolConfig {
     pub name: String,
     pub description: String,
+    pub creator: Address,
     pub target_amount: i128,
     pub is_private: bool,
     pub duration: u64,
@@ -72,6 +73,15 @@ impl PoolMetrics {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyWithdrawRequest {
+    pub creator: Address,
+    pub asset: Address,
+    pub amount: i128,
+    pub requested_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {
     Pool(u64),
     PoolState(u64),
@@ -79,6 +89,8 @@ pub enum StorageKey {
     NextPoolId,
     IsPaused,
     Admin,
+    GracePeriod,
+    EmergencyWithdraw(u64),
 }
 
 #[cfg(test)]
@@ -92,6 +104,7 @@ mod tests {
         let cfg = PoolConfig {
             name: String::from_str(&env, "Education Fund"),
             description: String::from_str(&env, "Scholarships for underprivileged students"),
+            creator: Address::generate(&env),
             target_amount: 1_000_000,
             is_private: false,
             duration: 30 * 24 * 60 * 60,
@@ -108,6 +121,7 @@ mod tests {
         let cfg = PoolConfig {
             name: String::from_str(&env, "Invalid Target"),
             description: String::from_str(&env, "Should panic"),
+            creator: Address::generate(&env),
             target_amount: 0,
             is_private: false,
             duration: 30 * 24 * 60 * 60,

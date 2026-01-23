@@ -288,17 +288,78 @@ fn test_get_pool() {
 
     let pool = client.get_pool(&pool_id).unwrap();
 
-    // PoolConfig no longer carries id, creator or deadline fields; these
-    // are tracked separately in storage. Validate the fields that remain
-    // on the configuration struct.
     assert_eq!(pool.name, name);
     assert_eq!(pool.description, description);
+    assert_eq!(pool.creator, creator);
     assert_eq!(pool.target_amount, target_amount);
     // duration is derived from deadline and current timestamp, so it
     // should be positive and no greater than the originally requested
     // deadline offset.
     assert!(pool.duration > 0);
     assert!(pool.created_at <= env.ledger().timestamp()); // created_at should be <= current time
+}
+
+#[test]
+fn test_emergency_withdrawal_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Register a mock token for testing
+    let admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract(admin.clone());
+    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+    let token_client = soroban_sdk::token::Client::new(&env, &token_id);
+
+    let contract_id = env.register(CrowdfundingContract, ());
+    let client = CrowdfundingContractClient::new(&env, &contract_id);
+
+    // Initialize with admin
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let contributor = Address::generate(&env);
+    let name = String::from_str(&env, "Emergency Pool");
+    let description = String::from_str(&env, "Test description");
+    let target_amount = 10_000i128;
+    let deadline = env.ledger().timestamp() + 86400;
+
+    let pool_id = client.save_pool(&name, &description, &creator, &target_amount, &deadline);
+
+    // Contribute some funds
+    token_admin_client.mint(&contributor, &5000i128);
+    client.contribute(&pool_id, &contributor, &token_id, &2000i128, &false);
+
+    assert_eq!(token_client.balance(&contract_id), 2000i128);
+
+    // Request emergency withdraw - only admin or creator
+    let amount_to_withdraw = 2000i128;
+    client.request_emergency_withdraw(
+        &pool_id,
+        &creator,
+        &token_id,
+        &amount_to_withdraw,
+    );
+
+    // Try to execute immediately - should fail due to grace period
+    let result = client.try_execute_emergency_withdraw(&pool_id);
+    assert_eq!(result, Err(Ok(CrowdfundingError::GracePeriodNotMet)));
+
+    // Set grace period to 1 hour (3600 seconds)
+    client.set_grace_period(&admin, &3600);
+    assert_eq!(client.get_grace_period(), 3600);
+
+    // Fast forward 3601 seconds
+    env.ledger().with_mut(|li| li.timestamp += 3601);
+
+    // Execute withdrawal
+    client.execute_emergency_withdraw(&pool_id);
+
+    // Verify balances
+    assert_eq!(token_client.balance(&contract_id), 0i128);
+    assert_eq!(token_client.balance(&creator), 2000i128);
+
+    // Verify request is cleared
+    assert!(client.get_emergency_withdraw_request(&pool_id).is_none());
 }
 
 #[test]

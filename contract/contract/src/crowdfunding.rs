@@ -3,7 +3,9 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 use crate::base::{
     errors::CrowdfundingError,
     events,
-    types::{CampaignDetails, PoolConfig, PoolMetrics, PoolState, StorageKey},
+    types::{
+        CampaignDetails, EmergencyWithdrawRequest, PoolConfig, PoolMetrics, PoolState, StorageKey,
+    },
 };
 use crate::interfaces::crowdfunding::CrowdfundingTrait;
 
@@ -110,6 +112,7 @@ impl CrowdfundingTrait for CrowdfundingContract {
         let pool_config = PoolConfig {
             name: name.clone(),
             description: description.clone(),
+            creator: creator.clone(),
             target_amount,
             is_private: false,
             duration,
@@ -297,5 +300,127 @@ impl CrowdfundingTrait for CrowdfundingContract {
         );
 
         Ok(())
+    }
+
+    fn request_emergency_withdraw(
+        env: Env,
+        pool_id: u64,
+        creator: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<(), CrowdfundingError> {
+        creator.require_auth();
+
+        // Verify pool exists and caller is admin or pool creator
+        let pool_key = StorageKey::Pool(pool_id);
+        let pool: PoolConfig = env
+            .storage()
+            .instance()
+            .get(&pool_key)
+            .ok_or(CrowdfundingError::PoolNotFound)?;
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .ok_or(CrowdfundingError::NotAuthorized)?;
+
+        if creator != pool.creator && creator != admin {
+            return Err(CrowdfundingError::NotAuthorized);
+        }
+
+        let request = EmergencyWithdrawRequest {
+            creator: creator.clone(),
+            asset: asset.clone(),
+            amount,
+            requested_at: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::EmergencyWithdraw(pool_id), &request);
+
+        let grace_period = Self::get_grace_period(env.clone());
+        let unlock_time = env.ledger().timestamp() + grace_period;
+
+        events::emergency_withdraw_requested(&env, pool_id, creator, asset, amount, unlock_time);
+
+        Ok(())
+    }
+
+    fn execute_emergency_withdraw(env: Env, pool_id: u64) -> Result<(), CrowdfundingError> {
+        let request_key = StorageKey::EmergencyWithdraw(pool_id);
+        let request: EmergencyWithdrawRequest = env
+            .storage()
+            .instance()
+            .get(&request_key)
+            .ok_or(CrowdfundingError::EmergencyWithdrawalNotRequested)?;
+
+        request.creator.require_auth();
+
+        let grace_period = Self::get_grace_period(env.clone());
+        if env.ledger().timestamp() < request.requested_at + grace_period {
+            return Err(CrowdfundingError::GracePeriodNotMet);
+        }
+
+        // Perform the withdrawal
+        use soroban_sdk::token;
+        let token_client = token::Client::new(&env, &request.asset);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &request.creator,
+            &request.amount,
+        );
+
+        // Clear the request
+        env.storage().instance().remove(&request_key);
+
+        events::emergency_withdraw_executed(
+            &env,
+            pool_id,
+            request.creator,
+            request.asset,
+            request.amount,
+        );
+
+        Ok(())
+    }
+
+    fn set_grace_period(
+        env: Env,
+        admin: Address,
+        grace_period: u64,
+    ) -> Result<(), CrowdfundingError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .ok_or(CrowdfundingError::NotAuthorized)?;
+
+        if admin != stored_admin {
+            return Err(CrowdfundingError::NotAuthorized);
+        }
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::GracePeriod, &grace_period);
+        Ok(())
+    }
+
+    fn get_grace_period(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::GracePeriod)
+            .unwrap_or(24 * 60 * 60) // Default 24 hours
+    }
+
+    fn get_emergency_withdraw_request(
+        env: Env,
+        pool_id: u64,
+    ) -> Option<EmergencyWithdrawRequest> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::EmergencyWithdraw(pool_id))
     }
 }

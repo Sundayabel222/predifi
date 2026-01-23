@@ -21,4 +21,7 @@ pub enum CrowdfundingError {
     ContractAlreadyInitialized = 15,
     InvalidAmount = 16,
     TokenTransferFailed = 17,
+    EmergencyWithdrawalNotRequested = 18,
+    GracePeriodNotMet = 19,
+    NotAuthorized = 20,
 }
